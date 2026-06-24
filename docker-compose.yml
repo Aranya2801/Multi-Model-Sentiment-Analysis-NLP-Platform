@@ -1,0 +1,99 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: sentiment-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sentiment
+      POSTGRES_PASSWORD: sentiment
+      POSTGRES_DB: sentiment_platform
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sentiment"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: sentiment-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+    container_name: sentiment-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://sentiment:sentiment@db:5432/sentiment_platform
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - model_cache:/root/.cache/huggingface
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: sentiment-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+  # ---- Optional MLOps / monitoring stack (profile: full) ----
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.14.1
+    container_name: sentiment-mlflow
+    profiles: ["full"]
+    command: mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri /mlruns
+    ports:
+      - "5050:5000"
+    volumes:
+      - mlruns:/mlruns
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: sentiment-prometheus
+    profiles: ["full"]
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: sentiment-grafana
+    profiles: ["full"]
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+
+volumes:
+  pgdata:
+  model_cache:
+  mlruns:
+  grafana_data:
